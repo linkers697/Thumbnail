@@ -7,126 +7,118 @@ import traceback
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
 from youtubesearchpython.__future__ import VideosSearch
 
-DEFAULT_IMAGE = "AloneMusic/assets/default.png"
-CACHE_DIR = "cache"
-ASSETS_DIR = "AloneMusic/assets"
-EMOJI_ICON = "🎵"
-
-os.makedirs(CACHE_DIR, exist_ok=True)
 
 def changeImageSize(maxWidth, maxHeight, image):
     widthRatio = maxWidth / image.size[0]
     heightRatio = maxHeight / image.size[1]
     newWidth = int(widthRatio * image.size[0])
     newHeight = int(heightRatio * image.size[1])
-    return image.resize((newWidth, newHeight))
+    newImage = image.resize((newWidth, newHeight))
+    return newImage
 
-def truncate(text, limit=30):
+
+def truncate(text):
     words = text.split(" ")
     text1, text2 = "", ""
-    for i in words:
-        if len(text1)+len(i) < limit: text1 += " " + i
-        elif len(text2)+len(i) < limit: text2 += " " + i
+    for w in words:
+        if len(text1) + len(w) < 30:
+            text1 += " " + w
+        elif len(text2) + len(w) < 30:
+            text2 += " " + w
     return [text1.strip(), text2.strip()]
 
+
+def draw_text_with_outline(draw, pos, text, font, fill, outline_color=(0, 0, 0)):
+    x0, y0 = pos
+    outline_range = 2
+    for dx in range(-outline_range, outline_range + 1):
+        for dy in range(-outline_range, outline_range + 1):
+            if dx == 0 and dy == 0:
+                continue
+            draw.text((x0 + dx, y0 + dy), text, font=font, fill=outline_color)
+    draw.text((x0, y0), text, font=font, fill=fill)
+
+
 async def get_thumb(videoid: str):
+    url = f"https://www.youtube.com/watch?v={videoid}"
     try:
-        url = f"https://www.youtube.com/watch?v={videoid}"
         results = VideosSearch(url, limit=1)
-        result_data = await results.next()
-        result = result_data.get("result", [{}])[0]
+        for result in (await results.next())["result"]:
+            title = re.sub("\W+", " ", result.get("title", "Unsupported Title")).title()
+            duration = result.get("duration", "Unknown Mins")
+            thumbnail = result["thumbnails"][0]["url"].split("?")[0]
+            views = result.get("viewCount", {}).get("short", "Unknown Views")
+            channel = result.get("channel", {}).get("name", "Unknown Channel")
 
-        title = re.sub("\W+", " ", result.get("title", "Unsupported Title")).title()
-        duration = result.get("duration", "Unknown Mins")
-        views = result.get("viewCount", {}).get("short", "Unknown Views")
-        channel = result.get("channel", {}).get("name", "Unknown Channel")
-        thumbnail_url = result.get("thumbnails", [{"url": DEFAULT_IMAGE}])[0].get("url", DEFAULT_IMAGE).split("?")[0]
-
-        # Fetch thumbnail
         async with aiohttp.ClientSession() as session:
-            async with session.get(thumbnail_url) as resp:
+            async with session.get(thumbnail) as resp:
                 if resp.status == 200:
-                    async with aiofiles.open(f"{CACHE_DIR}/thumb{videoid}.png", mode="wb") as f:
-                        await f.write(await resp.read())
+                    f = await aiofiles.open(f"cache/thumb{videoid}.png", mode="wb")
+                    await f.write(await resp.read())
+                    await f.close()
 
-        # Open safely
-        try:
-            youtube = Image.open(f"{CACHE_DIR}/thumb{videoid}.png").convert("RGBA")
-        except Exception:
-            youtube = Image.open(DEFAULT_IMAGE).convert("RGBA")
+        icons = Image.open("AloneMusic/assets/icons.png").convert("RGBA")
+        youtube = Image.open(f"cache/thumb{videoid}.png").convert("RGBA")
+        youtube_resized = changeImageSize(1280, 720, youtube)
 
-        # Base background
-        image1 = changeImageSize(1280, 720, youtube)
-        background_base = image1.filter(ImageFilter.GaussianBlur(20))
-        background_base = ImageEnhance.Brightness(background_base).enhance(0.6)
+        # Background: blurred + gradient overlay
+        bg = youtube_resized.filter(ImageFilter.GaussianBlur(25))
+        enhancer = ImageEnhance.Brightness(bg)
+        bg = enhancer.enhance(0.4)
+        overlay = Image.new("RGBA", bg.size, (15, 15, 25, 200))
+        background = Image.alpha_composite(bg, overlay)
 
-        # Crop logo multiple angles
+        # Logo crop + glow + shadow
         Xc, Yc = youtube.width / 2, youtube.height / 2
-        logos = []
-        for i in range(10):
-            angle = random.randint(-25, 25)
-            x1, y1 = Xc - 150, Yc - 150
-            x2, y2 = Xc + 150, Yc + 150
-            logo = youtube.crop((x1, y1, x2, y2))
-            logo.thumbnail((150,150))
-            logo = logo.rotate(angle, expand=True)
-            rand_color = tuple(random.randint(50,200) for _ in range(3))
-            logo = ImageOps.expand(logo, border=10, fill=rand_color)
-            logos.append(logo)
+        x1, y1, x2, y2 = Xc - 250, Yc - 250, Xc + 250, Yc + 250
+        rand_color = (random.randint(100, 255), random.randint(50, 200), random.randint(100, 255))
+        logo = youtube.crop((x1, y1, x2, y2))
+        logo.thumbnail((350, 350), Image.ANTIALIAS)
 
-        def draw_text(draw_obj, stitle, channel, views, frame_num):
-            try:
-                font1 = ImageFont.truetype(f"{ASSETS_DIR}/font2.ttf", 40)
-                font2 = ImageFont.truetype(f"{ASSETS_DIR}/font3.ttf", 55)
-            except:
-                font1 = font2 = ImageFont.load_default()
+        glow = ImageOps.expand(logo, border=20, fill=rand_color)
+        glow = glow.filter(ImageFilter.GaussianBlur(15))
+        background.paste(glow, (80, 120), glow)
+        background.paste(logo, (100, 140), logo)
 
-            # Gradient multi-color text
-            for idx, line in enumerate(stitle):
-                color = tuple(random.randint(200,255) for _ in range(3))
-                draw_obj.text((565, 180 + idx*60), line, fill=color, font=font2, stroke_width=2, stroke_fill=(0,0,0))
-            
-            draw_obj.text((565, 320), f"{channel} | {views[:23]}", (255,255,255), font=font1)
-            emoji_x = 565 + (frame_num*25 % 300)
-            draw_obj.text((emoji_x, 500), EMOJI_ICON, (255,255,255), font=font1)
+        draw = ImageDraw.Draw(background)
+        font_chan = ImageFont.truetype("AloneMusic/assets/font2.ttf", 30)
+        font_small = ImageFont.truetype("AloneMusic/assets/font.ttf", 28)
+        font_title = ImageFont.truetype("AloneMusic/assets/font3.ttf", 50)
 
-        # Create animated frames
-        frames = []
         stitle = truncate(title)
-        for fnum in range(6):
-            bg = background_base.copy()
-            draw = ImageDraw.Draw(bg)
-            # Paste logos at different positions & angles
-            for i, logo in enumerate(logos):
-                x = 100 + (i%5)*220 + random.randint(-15,15)
-                y = 450 + (i//5)*180 + random.randint(-10,10)
-                shadow = Image.new("RGBA", logo.size, (0,0,0,100))
-                bg.paste(shadow, (x+5,y+5), shadow)
-                bg.paste(logo, (x,y), logo)
-            factor = 0.9 + (fnum%2)*0.15
-            bg = ImageEnhance.Brightness(bg).enhance(factor)
-            draw_text(draw, stitle, channel, views, fnum)
-            frames.append(bg)
+        draw_text_with_outline(draw, (565, 160), stitle[0], font_title, (255, 255, 255))
+        if stitle[1]:
+            draw_text_with_outline(draw, (565, 220), stitle[1], font_title, (240, 240, 240))
 
-        # Optional icons overlay
+        # channel + views
+        draw.text((565, 300), f"{channel} | {views[:23]}", font=font_chan, fill=(200, 200, 200))
+
+        # modern progress bar
+        draw.rounded_rectangle([(565, 370), (1130, 390)], radius=10, fill=(50, 50, 50))
+        draw.rounded_rectangle([(565, 370), (950, 390)], radius=10, fill=rand_color)
+        draw.ellipse([(940, 365), (970, 395)], fill=rand_color)
+
+        # time
+        draw.text((565, 400), "00:00", font=font_chan, fill=(255, 255, 255))
+        draw.text((1080, 400), duration[:23], font=font_chan, fill=(255, 255, 255))
+
+        # music icons
+        icons_resized = icons.resize((560, 58), Image.ANTIALIAS)
+        background.paste(icons_resized, (565, 460), icons_resized)
+
+        # small overlay
+        small_thumb = youtube.resize((120, 70), Image.ANTIALIAS)
+        background.paste(small_thumb, (1080, 30), small_thumb)
+
         try:
-            icons = Image.open(f"{ASSETS_DIR}/icons.png").resize((580,62))
-            for frame in frames:
-                frame.paste(icons, (565,450), icons if icons.mode=="RGBA" else None)
+            os.remove(f"cache/thumb{videoid}.png")
         except:
             pass
 
-        # Cleanup temp
-        try:
-            os.remove(f"{CACHE_DIR}/thumb{videoid}.png")
-        except:
-            pass
-
-        # Save animated GIF
-        tpath = f"{CACHE_DIR}/{videoid}.gif"
-        frames[0].save(tpath, save_all=True, append_images=frames[1:], duration=200, loop=0)
+        tpath = f"cache/{videoid}.png"
+        background.save(tpath)
         return tpath
 
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
         return None
