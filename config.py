@@ -48,7 +48,7 @@ API_KEY = getenv("API_KEY", '30DxNexGenBots8ea03d')
 
 UPSTREAM_REPO = getenv(
     "UPSTREAM_REPO",
-    "https://github.com/linkers697/Divyaalone",
+    "https://github.com/linkers697/Thumbnail",
 )
 UPSTREAM_BRANCH = getenv("UPSTREAM_BRANCH", "master")
 GIT_TOKEN = getenv(
