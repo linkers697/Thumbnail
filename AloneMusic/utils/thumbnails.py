@@ -4,7 +4,7 @@ import random
 import aiohttp
 import aiofiles
 import traceback
-from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont, ImageOps, ImageSequence
 from youtubesearchpython.__future__ import VideosSearch
 
 DEFAULT_IMAGE = "AloneMusic/assets/default.png"
@@ -15,16 +15,15 @@ def changeImageSize(maxWidth, maxHeight, image):
         heightRatio = maxHeight / image.size[1]
         newWidth = int(widthRatio * image.size[0])
         newHeight = int(heightRatio * image.size[1])
-        newImage = image.resize((newWidth, newHeight))
-        return newImage
+        return image.resize((newWidth, newHeight))
     except Exception:
         return image
 
 def truncate(text):
     try:
-        list = text.split(" ")
+        words = text.split(" ")
         text1, text2 = "", ""
-        for i in list:
+        for i in words:
             if len(text1) + len(i) < 30:
                 text1 += " " + i
             elif len(text2) + len(i) < 30:
@@ -37,7 +36,8 @@ async def get_thumb(videoid: str):
     try:
         url = f"https://www.youtube.com/watch?v={videoid}"
         results = VideosSearch(url, limit=1)
-        result = (await results.next())["result"][0] if (await results.next())["result"] else {}
+        result_data = await results.next()
+        result = result_data["result"][0] if result_data.get("result") else {}
 
         title = re.sub("\W+", " ", result.get("title", "Unsupported Title")).title()
         duration = result.get("duration", "Unknown Mins")
@@ -45,31 +45,29 @@ async def get_thumb(videoid: str):
         channel = result.get("channel", {}).get("name", "Unknown Channel")
         thumbnail_url = result.get("thumbnails", [{"url": DEFAULT_IMAGE}])[0].get("url", DEFAULT_IMAGE).split("?")[0]
 
+        # Fetch thumbnail image
         async with aiohttp.ClientSession() as session:
             async with session.get(thumbnail_url) as resp:
                 if resp.status == 200:
-                    f = await aiofiles.open(f"cache/thumb{videoid}.png", mode="wb")
-                    await f.write(await resp.read())
-                    await f.close()
+                    async with aiofiles.open(f"cache/thumb{videoid}.png", mode="wb") as f:
+                        await f.write(await resp.read())
                 else:
-                    # fallback image
                     thumbnail_url = DEFAULT_IMAGE
 
+        # Open image safely
         try:
             youtube = Image.open(f"cache/thumb{videoid}.png")
         except Exception:
             youtube = Image.open(DEFAULT_IMAGE)
 
         image1 = changeImageSize(1280, 720, youtube)
-        image2 = image1.convert("RGBA")
-        background = image2.filter(ImageFilter.GaussianBlur(20))
+        background = image1.convert("RGBA").filter(ImageFilter.GaussianBlur(20))
         background = ImageEnhance.Brightness(background).enhance(0.6)
 
-        # Logo crop with safety
-        Xcenter, Ycenter = youtube.width / 2, youtube.height / 2
-        x1, y1 = Xcenter - 250, Ycenter - 250
-        x2, y2 = Xcenter + 250, Ycenter + 250
-
+        # Crop and paste logo safely
+        Xc, Yc = youtube.width / 2, youtube.height / 2
+        x1, y1 = Xc - 250, Yc - 250
+        x2, y2 = Xc + 250, Yc + 250
         rand_color = (random.randint(50, 200), random.randint(50, 200), random.randint(50, 200))
         logo = youtube.crop((x1, y1, x2, y2)) if hasattr(youtube, "crop") else youtube
         logo.thumbnail((370, 370), Image.ANTIALIAS)
@@ -80,19 +78,20 @@ async def get_thumb(videoid: str):
         draw = ImageDraw.Draw(background)
         try:
             arial = ImageFont.truetype("AloneMusic/assets/font2.ttf", 30)
-            font = ImageFont.truetype("AloneMusic/assets/font.ttf", 30)
             tfont = ImageFont.truetype("AloneMusic/assets/font3.ttf", 45)
         except Exception:
-            arial = font = tfont = ImageFont.load_default()
+            arial = tfont = ImageFont.load_default()
 
         stitle = truncate(title)
         draw.text((565, 180), stitle[0], (255, 255, 255), font=tfont)
         draw.text((565, 230), stitle[1], (255, 255, 255), font=tfont)
         draw.text((565, 320), f"{channel} | {views[:23]}", (255, 255, 255), font=arial)
 
+        # Progress bar + animation effect (subtle)
         draw.line([(565, 385), (1130, 385)], fill="white", width=8, joint="curve")
-        draw.line([(565, 385), (999, 385)], fill=rand_color, width=8, joint="curve")
-        draw.ellipse([(999, 375), (1020, 395)], outline=rand_color, fill=rand_color, width=15)
+        progress_end = random.randint(600, 999)
+        draw.line([(565, 385), (progress_end, 385)], fill=rand_color, width=8, joint="curve")
+        draw.ellipse([(progress_end, 375), (progress_end+21, 395)], outline=rand_color, fill=rand_color, width=15)
         draw.text((565, 400), "00:00", (255, 255, 255), font=arial)
         draw.text((1080, 400), f"{duration[:23]}", (255, 255, 255), font=arial)
 
@@ -109,8 +108,11 @@ async def get_thumb(videoid: str):
         except Exception:
             pass
 
-        tpath = f"cache/{videoid}.png"
-        background.save(tpath)
+        # Optional: create subtle glow animation (2 frames)
+        frame1 = background.copy()
+        frame2 = ImageEnhance.Brightness(background).enhance(1.2)
+        tpath = f"cache/{videoid}.gif"
+        frame1.save(tpath, save_all=True, append_images=[frame2], duration=500, loop=0)
         return tpath
 
     except Exception:
